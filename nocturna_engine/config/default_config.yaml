@@ -1,0 +1,57 @@
+engine:
+  max_concurrency: 4
+  default_timeout_seconds: 60
+  finding_index_path: null
+
+plugins:
+  auto_discover_packages: []
+  strict_discovery: false
+
+events:
+  handler_timeout_seconds: 5
+  handler_retries: 1
+
+pipeline:
+  scan_timeout_seconds: 90
+  analyze_timeout_seconds: 60
+  report_timeout_seconds: 45
+
+logging:
+  level: INFO
+
+security:
+  scope_firewall:
+    # Emergency breaker: when true, all scoped traffic is denied before tool.execute().
+    kill_switch: false
+    # If both allowlists are empty, firewall runs in backward-compatible allow mode.
+    # When any allowlist has entries, only matching hosts/CIDRs are allowed.
+    allowlist_hosts: []
+    allowlist_cidrs: []
+    # Denylists always take precedence over allowlists.
+    denylist_hosts: []
+    denylist_cidrs: []
+
+policy:
+  # Coarse execution toggles.
+  allow_subprocess: true
+  allow_network: true
+  allow_filesystem: true
+  # Granular egress controls. Empty allow/deny lists preserve backward-compatible allow behavior.
+  egress_allow_hosts: []
+  egress_deny_hosts: []
+  egress_allow_cidrs: []
+  egress_deny_cidrs: []
+  egress_allow_ports: []
+  egress_deny_ports: []
+  egress_allow_protocols: []
+  egress_deny_protocols: []
+  # When set to "deny", unmatched egress endpoints are denied by default.
+  default_egress_action: allow
+
+features:
+  plugin_system_v2: false
+  event_contract_v2: false
+  ai_api_v2: false
+  phase_dag_pipeline: false
+  # Keep true in production to deny execution on invalid policy payloads.
+  policy_fail_closed: true

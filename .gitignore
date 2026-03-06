@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Distribution / packaging
+*.egg-info/
+*.egg
+dist/
+build/
+wheels/
+
+# Testing
+.pytest_cache/
+.tmp_test/
+-p/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Env / secrets
+.env
+.env.*
+!.env.example

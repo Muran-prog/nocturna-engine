@@ -1,0 +1,7 @@
+rules:
+- id: test.rule.shell-true
+  languages: [python]
+  pattern: subprocess.call(..., shell=True)
+  message: shell=True can enable command injection
+  severity: ERROR
+
