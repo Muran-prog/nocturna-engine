@@ -15,6 +15,9 @@ env/
 dist/
 build/
 wheels/
+*.whl
+*.tar.gz
+nocturna_engine-*/
 
 # Testing
 .pytest_cache/

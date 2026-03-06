@@ -1,10 +1,11 @@
 # Nocturna Engine
 
+[![CI](https://github.com/Muran-prog/nocturna-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/Muran-prog/nocturna-engine/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?style=flat-square)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-0.1.0-informational?style=flat-square)](https://github.com/Muran-prog/nocturna-engine)
+[![PyPI](https://img.shields.io/pypi/v/nocturna-engine?style=flat-square&color=informational)](https://pypi.org/project/nocturna-engine/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-3405%20passing-brightgreen?style=flat-square)](#)
-[![Async-first](https://img.shields.io/badge/async-first-blueviolet?style=flat-square)](#)
+[![Pydantic v2](https://img.shields.io/badge/pydantic-v2-E92063?style=flat-square)](https://docs.pydantic.dev/)
+[![Security: defusedxml](https://img.shields.io/badge/XML-defusedxml-orange?style=flat-square)](https://github.com/tiran/defusedxml)
 
 Async-first modular orchestration core for security tooling. Drop in your tools, wire up the pipeline, get normalized findings.
 
