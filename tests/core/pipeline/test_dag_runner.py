@@ -730,3 +730,168 @@ async def test_later_step_can_overwrite_context_key() -> None:
     ]
     result = await runner.run(steps, tool_handler=handler)
     assert result["val"] == "second"
+
+
+# ===========================================================================
+# Parallel execution of independent ready steps
+# ===========================================================================
+
+
+async def test_independent_ready_steps_run_concurrently() -> None:
+    """Three independent steps should complete in ~max(step_time), not sum."""
+    import time as _time
+
+    runner = PhaseDAGRunner(concurrency_limit=4)
+    step_delay = 0.15
+
+    async def handler(step: PhaseStep, _ctx: PipelineContext) -> PipelineContext:
+        await asyncio.sleep(step_delay)
+        return {f"ran_{step.id}": True}
+
+    steps = [
+        PhaseStep(id="a", phase="scan", tool="t1"),
+        PhaseStep(id="b", phase="scan", tool="t2"),
+        PhaseStep(id="c", phase="scan", tool="t3"),
+    ]
+
+    wall_start = _time.monotonic()
+    result = await runner.run(steps, tool_handler=handler)
+    wall_elapsed = _time.monotonic() - wall_start
+
+    # All steps should succeed
+    assert result["ran_a"] is True
+    assert result["ran_b"] is True
+    assert result["ran_c"] is True
+    assert result["dag_step_status"]["a"] == "succeeded"
+    assert result["dag_step_status"]["b"] == "succeeded"
+    assert result["dag_step_status"]["c"] == "succeeded"
+
+    # Wall-clock must be ~step_delay (parallel), not ~3*step_delay (sequential)
+    # Allow generous 2x margin for CI/slow machines, but must be << 3x
+    assert wall_elapsed < step_delay * 2.5, (
+        f"Expected parallel execution (~{step_delay:.2f}s) but took {wall_elapsed:.2f}s"
+    )
+
+
+async def test_parallel_steps_with_one_failure_others_succeed() -> None:
+    """A failed step in a parallel batch must not block sibling steps."""
+    runner = PhaseDAGRunner(concurrency_limit=4)
+
+    async def handler(step: PhaseStep, _ctx: PipelineContext) -> PipelineContext:
+        if step.id == "fail":
+            raise RuntimeError("planned failure")
+        await asyncio.sleep(0.05)
+        return {f"ran_{step.id}": True}
+
+    steps = [
+        PhaseStep(id="ok1", phase="scan", tool="t1"),
+        PhaseStep(id="fail", phase="scan", tool="t2", retries=0),
+        PhaseStep(id="ok2", phase="scan", tool="t3"),
+    ]
+    result = await runner.run(steps, tool_handler=handler)
+
+    assert result["ran_ok1"] is True
+    assert result["ran_ok2"] is True
+    assert result["dag_step_status"]["ok1"] == "succeeded"
+    assert result["dag_step_status"]["fail"] == "failed"
+    assert result["dag_step_status"]["ok2"] == "succeeded"
+    assert any(e["step"] == "fail" for e in result["errors"])
+
+
+async def test_parallel_steps_merge_list_fields_via_concatenation() -> None:
+    """Parallel steps returning list-merge keys should concatenate, not overwrite."""
+    runner = PhaseDAGRunner(concurrency_limit=4)
+
+    async def handler(step: PhaseStep, _ctx: PipelineContext) -> PipelineContext:
+        return {"findings": [f"finding_from_{step.id}"]}
+
+    steps = [
+        PhaseStep(id="a", phase="scan", tool="t1"),
+        PhaseStep(id="b", phase="scan", tool="t2"),
+        PhaseStep(id="c", phase="scan", tool="t3"),
+    ]
+    result = await runner.run(steps, tool_handler=handler)
+
+    findings = result.get("findings", [])
+    assert len(findings) == 3
+    assert "finding_from_a" in findings
+    assert "finding_from_b" in findings
+    assert "finding_from_c" in findings
+
+
+async def test_concurrency_limit_respected() -> None:
+    """When concurrency_limit=1, steps execute sequentially (order is stable)."""
+    runner = PhaseDAGRunner(concurrency_limit=1)
+    order: list[str] = []
+
+    async def handler(step: PhaseStep, _ctx: PipelineContext) -> PipelineContext:
+        order.append(step.id)
+        await asyncio.sleep(0.01)
+        return {}
+
+    steps = [
+        PhaseStep(id="a", phase="scan", tool="t1"),
+        PhaseStep(id="b", phase="scan", tool="t2"),
+        PhaseStep(id="c", phase="scan", tool="t3"),
+    ]
+    await runner.run(steps, tool_handler=handler)
+
+    # With concurrency_limit=1, execution is sequential so order is deterministic
+    assert order == ["a", "b", "c"]
+
+
+async def test_parallel_steps_deep_snapshot_isolation() -> None:
+    """Parallel steps must not see each other's context mutations."""
+    runner = PhaseDAGRunner(concurrency_limit=4)
+    contexts_seen: dict[str, dict[str, Any]] = {}
+
+    async def handler(step: PhaseStep, ctx: PipelineContext) -> PipelineContext:
+        # Mutate context in-place (should not leak to siblings)
+        ctx[f"mutated_by_{step.id}"] = True
+        contexts_seen[step.id] = dict(ctx)
+        await asyncio.sleep(0.05)
+        return {f"result_{step.id}": True}
+
+    steps = [
+        PhaseStep(id="x", phase="scan", tool="t1"),
+        PhaseStep(id="y", phase="scan", tool="t2"),
+    ]
+    result = await runner.run(steps, tool_handler=handler)
+
+    # x should not see y's mutation and vice versa
+    assert "mutated_by_y" not in contexts_seen.get("x", {})
+    assert "mutated_by_x" not in contexts_seen.get("y", {})
+
+    # But results should be merged back
+    assert result["result_x"] is True
+    assert result["result_y"] is True
+
+
+async def test_parallel_execution_events_correct() -> None:
+    """Event emission should be correct with parallel execution."""
+
+    class _EventBusStub:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict[str, Any]]] = []
+
+        async def publish(self, event_name: str, payload: dict[str, Any]) -> None:
+            self.events.append((event_name, dict(payload)))
+
+    bus = _EventBusStub()
+    runner = PhaseDAGRunner(event_bus=bus, concurrency_limit=4)
+
+    async def handler(step: PhaseStep, _ctx: PipelineContext) -> PipelineContext:
+        await asyncio.sleep(0.01)
+        return {}
+
+    steps = [
+        PhaseStep(id="a", phase="scan", tool="t1"),
+        PhaseStep(id="b", phase="scan", tool="t2"),
+        PhaseStep(id="c", phase="scan", tool="t3"),
+    ]
+    result = await runner.run(steps, tool_handler=handler)
+
+    event_names = [name for name, _ in bus.events]
+    assert "on_phase_started" in event_names
+    assert "on_phase_finished" in event_names
+    assert result["dag_phase_status"]["scan"] == "succeeded"

@@ -57,6 +57,9 @@ class _EngineLifecycleMixin:
         self.finding_index = FindingFingerprintIndex()
         self._started = False
         self._start_lock = asyncio.Lock()
+        self._active_scans: dict[str, asyncio.Task[dict[str, Any]]] = {}
+        self._draining = False
+        self._drain_timeout_seconds: float = 30.0
         self._config: dict[str, Any] = {}
         self._configure_default_pipeline()
 
@@ -140,6 +143,9 @@ class _EngineLifecycleMixin:
             if self._started:
                 return
             self._config = self.config_service.load()
+            drain_timeout = self._config.get("engine", {}).get("drain_timeout_seconds")
+            if isinstance(drain_timeout, (int, float)) and drain_timeout > 0:
+                self._drain_timeout_seconds = float(drain_timeout)
             finding_index_path = self._config.get("engine", {}).get("finding_index_path")
             if isinstance(finding_index_path, str) and finding_index_path.strip():
                 try:
@@ -169,14 +175,43 @@ class _EngineLifecycleMixin:
             self.logger.info("engine_started", tool_count=len(self.plugin_manager.list_registered_tools()))
 
     async def stop(self) -> None:
-        """Stop engine and release managed resources."""
+        """Stop engine: drain active scans, then release managed resources."""
 
         async with self._start_lock:
             if not self._started:
                 return
+            self._draining = True
             try:
-                await self.plugin_manager.shutdown_plugins()
+                await self._drain_active_scans()
             finally:
-                await self.event_bus.close()
-                self._started = False
-                self.logger.info("engine_stopped")
+                try:
+                    await self.plugin_manager.shutdown_plugins()
+                finally:
+                    await self.event_bus.close()
+                    self._started = False
+                    self._draining = False
+                    self.logger.info("engine_stopped")
+
+    async def _drain_active_scans(self) -> None:
+        """Wait for active scans to complete, cancel if timeout exceeded."""
+        if not self._active_scans:
+            return
+        self.logger.info(
+            "engine_draining",
+            active_scan_count=len(self._active_scans),
+            timeout_seconds=self._drain_timeout_seconds,
+        )
+        tasks = list(self._active_scans.values())
+        done, pending = await asyncio.wait(
+            tasks,
+            timeout=self._drain_timeout_seconds,
+        )
+        if pending:
+            self.logger.warning(
+                "engine_drain_timeout",
+                pending_count=len(pending),
+            )
+            for task in pending:
+                task.cancel()
+            # Wait for cancellation to propagate
+            await asyncio.gather(*pending, return_exceptions=True)

@@ -7,7 +7,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from nocturna_engine.core.pipeline import ArtifactStore, PhaseDAGRunner, PhaseStep
-from nocturna_engine.exceptions import PipelineError
+from nocturna_engine.exceptions import (
+    FingerprintIndexCorruptionError,
+    FingerprintIndexIOError,
+    PipelineError,
+)
 from nocturna_engine.models.finding import Finding
 from nocturna_engine.models.scan_request import ScanRequest
 
@@ -21,58 +25,129 @@ class _EngineScanExecutionMixin:
 
         Returns:
             dict[str, Any]: Final pipeline context.
+
+        Raises:
+            RuntimeError: If the engine is draining (shutting down).
         """
 
         if not self._started:
             await self.start()
 
-        await self.event_bus.publish(
-            "on_scan_started",
-            {
-                "request_id": request.request_id,
-                "target_count": len(request.targets),
-                "tool_names": request.tool_names or [],
-            },
-        )
-
-        initial_context: dict[str, Any] = {
-            "request": request,
-            "scan_started_at": datetime.now(UTC),
-        }
-        if self._is_phase_dag_enabled(request):
-            final_context = await self._run_scan_with_phase_dag(initial_context)
-        else:
-            final_context = await self.pipeline.run(initial_context)
-
-        findings = [
-            finding
-            for finding in final_context.get("findings", [])
-            if isinstance(finding, Finding)
-        ]
-        try:
-            trend_entries = self.finding_index.observe_findings(findings)
-            final_context["finding_trends"] = {
-                finding.fingerprint: trend_entries[finding.fingerprint].to_dict()
-                for finding in findings
-                if finding.fingerprint in trend_entries
-            }
-            final_context["finding_trend_index_size"] = len(self.finding_index)
-        except Exception:
-            self.logger.warning(
-                "finding_index_update_failed",
-                request_id=request.request_id,
-                exc_info=True,
+        if self._draining:
+            raise RuntimeError(
+                f"Engine is shutting down. Scan request '{request.request_id}' rejected."
             )
 
-        await self.event_bus.publish(
-            "on_scan_finished",
-            {
-                "request_id": request.request_id,
-                "result_count": len(final_context.get("scan_results", [])),
-                "finding_count": len(final_context.get("findings", [])),
-            },
-        )
-        return final_context
+        scan_task = asyncio.current_task()
+        if scan_task is not None:
+            self._active_scans[request.request_id] = scan_task
+
+        try:
+            await self.event_bus.publish(
+                "on_scan_started",
+                {
+                    "request_id": request.request_id,
+                    "target_count": len(request.targets),
+                    "tool_names": request.tool_names or [],
+                },
+            )
+
+            initial_context: dict[str, Any] = {
+                "request": request,
+                "scan_started_at": datetime.now(UTC),
+            }
+            if self._is_phase_dag_enabled(request):
+                final_context = await self._run_scan_with_phase_dag(initial_context)
+            else:
+                final_context = await self.pipeline.run(initial_context)
+
+            findings = [
+                finding
+                for finding in final_context.get("findings", [])
+                if isinstance(finding, Finding)
+            ]
+            try:
+                trend_entries = self.finding_index.observe_findings(findings)
+                final_context["finding_trends"] = {
+                    finding.fingerprint: trend_entries[finding.fingerprint].to_dict()
+                    for finding in findings
+                    if finding.fingerprint in trend_entries
+                }
+                final_context["finding_trend_index_size"] = len(self.finding_index)
+            except FingerprintIndexCorruptionError as exc:
+                self.logger.error(
+                    "finding_index_corrupt",
+                    request_id=request.request_id,
+                    error=str(exc),
+                    exc_info=True,
+                )
+                await self.event_bus.publish(
+                    "on_fingerprint_index_error",
+                    {
+                        "request_id": request.request_id,
+                        "error_type": "corruption",
+                        "error": str(exc),
+                        "code": exc.code,
+                    },
+                )
+                # Disable trending for THIS scan run only
+                final_context["finding_trends"] = {}
+                final_context["finding_trend_index_size"] = 0
+                final_context["finding_trend_disabled"] = True
+                final_context["finding_trend_disabled_reason"] = str(exc)
+            except FingerprintIndexIOError as exc:
+                self.logger.warning(
+                    "finding_index_io_error",
+                    request_id=request.request_id,
+                    error=str(exc),
+                    exc_info=True,
+                )
+                await self.event_bus.publish(
+                    "on_fingerprint_index_error",
+                    {
+                        "request_id": request.request_id,
+                        "error_type": "io_error",
+                        "error": str(exc),
+                        "code": exc.code,
+                    },
+                )
+                # Transient — disable trending for this scan only
+                final_context["finding_trends"] = {}
+                final_context["finding_trend_index_size"] = 0
+                final_context["finding_trend_disabled"] = True
+                final_context["finding_trend_disabled_reason"] = str(exc)
+            except Exception as exc:
+                # Unexpected error — log as error, emit event, but don't crash scan
+                self.logger.error(
+                    "finding_index_unexpected_error",
+                    request_id=request.request_id,
+                    error=str(exc),
+                    exc_info=True,
+                )
+                await self.event_bus.publish(
+                    "on_fingerprint_index_error",
+                    {
+                        "request_id": request.request_id,
+                        "error_type": "unexpected",
+                        "error": str(exc),
+                    },
+                )
+                final_context["finding_trends"] = {}
+                final_context["finding_trend_index_size"] = 0
+                final_context["finding_trend_disabled"] = True
+                final_context["finding_trend_disabled_reason"] = str(exc)
+
+            await self.event_bus.publish(
+                "on_scan_finished",
+                {
+                    "request_id": request.request_id,
+                    "result_count": len(final_context.get("scan_results", [])),
+                    "finding_count": len(final_context.get("findings", [])),
+                },
+            )
+            return final_context
+        finally:
+            self._active_scans.pop(request.request_id, None)
 
     def run_scan_sync(self, request: ScanRequest) -> dict[str, Any]:
         """Synchronous facade for async scan execution.

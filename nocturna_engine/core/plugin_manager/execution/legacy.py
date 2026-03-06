@@ -8,7 +8,8 @@ from nocturna_engine.exceptions import PluginExecutionError
 from nocturna_engine.models.finding import Finding
 from nocturna_engine.models.scan_request import ScanRequest
 from nocturna_engine.models.scan_result import ScanResult
-from nocturna_engine.utils.async_helpers import TRANSIENT_RETRY_EXCEPTIONS, retry_async, with_timeout
+from nocturna_engine.utils.async_helpers import TRANSIENT_RETRY_EXCEPTIONS, merge_retry_exceptions, retry_async, with_timeout
+from nocturna_engine.core.plugin_manager.execution.isolation import execute_tool_isolated
 
 
 class PluginLegacyExecutionMixin:
@@ -72,6 +73,42 @@ class PluginLegacyExecutionMixin:
         timeout_seconds = float(getattr(tool, "timeout_seconds", self._default_timeout_seconds))
         retries = int(min(getattr(tool, "max_retries", request.retries), request.retries))
 
+        if getattr(tool, 'isolated', False):
+            result = await execute_tool_isolated(type(tool), request, timeout_seconds)
+            self._finalize_result_timing(result=result, started_at=started_at)
+            if result.success:
+                for finding in result.findings:
+                    await self._event_bus.publish(
+                        "on_raw_finding_detected",
+                        {
+                            "tool": tool_name,
+                            "request_id": request.request_id,
+                            "severity": finding.severity.value,
+                            "finding_id": finding.finding_id,
+                            "finding_fingerprint": finding.fingerprint,
+                        },
+                    )
+            else:
+                await self._event_bus.publish(
+                    "on_tool_error",
+                    {"tool": tool_name, "request_id": request.request_id, "error": result.error_message},
+                )
+            await self._event_bus.publish(
+                "on_tool_finished",
+                {
+                    "tool": tool_name,
+                    "request_id": request.request_id,
+                    "success": result.success,
+                    "duration_ms": result.duration_ms,
+                },
+            )
+            return result
+
+
+        effective_retry_exceptions = merge_retry_exceptions(
+            getattr(tool, 'retry_exceptions', ()),
+        )
+
         try:
 
             async def _execute() -> ScanResult:
@@ -84,7 +121,7 @@ class PluginLegacyExecutionMixin:
             result = await retry_async(
                 _execute,
                 retries=retries,
-                retry_exceptions=TRANSIENT_RETRY_EXCEPTIONS,
+                retry_exceptions=effective_retry_exceptions,
             )
             if not result.findings:
 
@@ -98,7 +135,7 @@ class PluginLegacyExecutionMixin:
                 parsed = await retry_async(
                     _parse,
                     retries=retries,
-                    retry_exceptions=TRANSIENT_RETRY_EXCEPTIONS,
+                    retry_exceptions=effective_retry_exceptions,
                 )
                 result.findings = parsed
             result.request_id = request.request_id

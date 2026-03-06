@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from nocturna_engine.exceptions import FingerprintIndexCorruptionError
 from nocturna_engine.core.engine.fingerprint_index import (
     FindingFingerprintIndex,
     FingerprintTrendEntry,
@@ -266,9 +267,11 @@ class TestFindingFingerprintIndexPersistence:
         try:
             storage = td / "broken.json"
             storage.write_text("{invalid json", encoding="utf-8")
-            # Should raise on load due to invalid JSON
-            with pytest.raises(json.JSONDecodeError):
+            # Should raise FingerprintIndexCorruptionError wrapping json.JSONDecodeError
+            with pytest.raises(FingerprintIndexCorruptionError) as exc_info:
                 FindingFingerprintIndex(storage_path=storage)
+            assert exc_info.value.__cause__ is not None
+            assert isinstance(exc_info.value.__cause__, json.JSONDecodeError)
         finally:
             shutil.rmtree(td, ignore_errors=True)
 

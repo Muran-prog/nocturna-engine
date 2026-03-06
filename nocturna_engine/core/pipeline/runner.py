@@ -62,7 +62,7 @@ class Pipeline:
             PipelineError: If a required step fails.
         """
 
-        context: PipelineContext = dict(initial_context or {})
+        context: PipelineContext = PipelineContext(initial_context or {})
         context.setdefault("errors", [])
 
         index = 0
@@ -123,8 +123,7 @@ class Pipeline:
         if not eligible:
             return context
 
-        snapshot = dict(context)
-        factories = [self._build_step_factory(step, snapshot) for step in eligible]
+        factories = [self._build_step_factory(step, context) for step in eligible]
         results = await bounded_gather(
             factories,
             concurrency_limit=max(1, len(factories)),
@@ -135,9 +134,7 @@ class Pipeline:
             if isinstance(result, BaseException):
                 context = self._handle_step_failure(step, context, result)
                 continue
-            for key, value in result.items():
-                if key not in ("errors", "request", "artifacts"):
-                    context[key] = value
+            context.merge_from(result)
         return context
 
     def _build_step_factory(
@@ -154,7 +151,7 @@ class Pipeline:
         """
 
         async def _operation() -> PipelineContext:
-            return await self._invoke_step(step, dict(context))
+            return await self._invoke_step(step, context.deep_snapshot())
 
         return _operation
 

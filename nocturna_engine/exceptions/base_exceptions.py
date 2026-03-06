@@ -223,3 +223,27 @@ class NocturnaTimeoutError(NocturnaError):
     default_category = "timeout"
     default_retryable = True
     default_remediation = "Increase timeout or reduce workload scope and retry."
+
+
+class FingerprintIndexError(NocturnaError):
+    """Base exception for fingerprint index operations."""
+
+    default_code = "fingerprint_index_error"
+    default_category = "fingerprint_index"
+    default_remediation = "Check fingerprint index file for corruption."
+
+
+class FingerprintIndexCorruptionError(FingerprintIndexError):
+    """Raised when fingerprint index data appears corrupt."""
+
+    default_code = "fingerprint_index_corruption"
+    default_retryable = False
+    default_remediation = "Delete or rebuild the fingerprint index file."
+
+
+class FingerprintIndexIOError(FingerprintIndexError):
+    """Raised for transient I/O errors during fingerprint index operations."""
+
+    default_code = "fingerprint_index_io_error"
+    default_retryable = True
+    default_remediation = "Retry the operation or check filesystem permissions."

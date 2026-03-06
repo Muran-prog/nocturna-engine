@@ -11,10 +11,20 @@ from nocturna_engine.exceptions import NocturnaTimeoutError
 
 T = TypeVar("T")
 
+_OPTIONAL_RETRY_EXCEPTIONS: list[type[BaseException]] = []
+
+try:
+    import aiohttp
+
+    _OPTIONAL_RETRY_EXCEPTIONS.append(aiohttp.ClientError)
+except ImportError:
+    pass
+
 TRANSIENT_RETRY_EXCEPTIONS: tuple[type[BaseException], ...] = (
     OSError,
     asyncio.TimeoutError,
     ConnectionError,
+    *_OPTIONAL_RETRY_EXCEPTIONS,
 )
 
 
@@ -108,3 +118,14 @@ async def bounded_gather(
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
 
+
+def merge_retry_exceptions(
+    *extra: tuple[type[BaseException], ...],
+) -> tuple[type[BaseException], ...]:
+    """Merge default transient retry exceptions with extra exception types."""
+    combined: list[type[BaseException]] = list(TRANSIENT_RETRY_EXCEPTIONS)
+    for group in extra:
+        for exc_type in group:
+            if exc_type not in combined:
+                combined.append(exc_type)
+    return tuple(combined)

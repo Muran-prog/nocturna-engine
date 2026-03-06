@@ -25,12 +25,16 @@ class BaseTool(ABC):
         version: Wrapper version string.
         timeout_seconds: Default execution timeout.
         max_retries: Default retry count for transient failures.
+        retry_exceptions: Additional exception types eligible for retry beyond defaults.
+        isolated: If True, execute in a separate process for crash isolation.
     """
 
     name: ClassVar[str] = ""
     version: ClassVar[str] = "0.1.0"
     timeout_seconds: ClassVar[float] = 60.0
     max_retries: ClassVar[int] = 2
+    isolated: ClassVar[bool] = False
+    retry_exceptions: ClassVar[tuple[type[BaseException], ...]] = ()
 
     def __init__(self, logger: BoundLogger | None = None) -> None:
         """Initialize plugin instance.

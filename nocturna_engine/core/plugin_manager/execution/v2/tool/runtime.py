@@ -8,7 +8,7 @@ from typing import Any
 from nocturna_engine.exceptions import NocturnaError, error_details_from_exception
 from nocturna_engine.models.scan_request import ScanRequest
 from nocturna_engine.models.scan_result import ScanResult
-from nocturna_engine.utils.async_helpers import TRANSIENT_RETRY_EXCEPTIONS, retry_async, with_timeout
+from nocturna_engine.utils.async_helpers import TRANSIENT_RETRY_EXCEPTIONS, merge_retry_exceptions, retry_async, with_timeout
 
 from .models import ToolPreflightState
 
@@ -28,6 +28,10 @@ async def run_tool_runtime(
         policy_decision=preflight.policy_decision,
         default_timeout_seconds=manager._default_timeout_seconds,
     )
+    # TODO: Add process-level isolation support for v2 adapters.
+    # When the adapter's underlying BaseTool has `isolated=True`, route through
+    # `execute_tool_isolated()` from `...isolation`.  Requires inspecting the
+    # adapter to find the concrete BaseTool class (adapter._tool or similar).
 
     context = manager.build_runtime_context(request=request, policy=preflight.policy)
     context.policy = {
@@ -63,6 +67,13 @@ async def run_tool_runtime(
         preflight.registration.manifest.health_profile.quarantine_seconds,
     )
 
+    tool_retry_exceptions = getattr(preflight.adapter, 'retry_exceptions', ())
+    if not tool_retry_exceptions:
+        tool_retry_exceptions = getattr(
+            getattr(preflight.adapter, '_tool', None), 'retry_exceptions', ()
+        )
+    effective_retry_exceptions = merge_retry_exceptions(tool_retry_exceptions)
+
     try:
 
         async def _execute() -> ScanResult:
@@ -75,7 +86,7 @@ async def run_tool_runtime(
         result = await retry_async(
             _execute,
             retries=retries,
-            retry_exceptions=TRANSIENT_RETRY_EXCEPTIONS,
+            retry_exceptions=effective_retry_exceptions,
         )
         result.request_id = request.request_id
         result.tool_name = tool_name

@@ -19,6 +19,13 @@ class PhaseDAGRunner(
 ):
     """Execute phase DAG nodes when all dependencies are completed."""
 
-    def __init__(self, *, logger: BoundLogger | None = None, event_bus: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        logger: BoundLogger | None = None,
+        event_bus: Any | None = None,
+        concurrency_limit: int = 4,
+    ) -> None:
         self._logger = logger or structlog.get_logger("phase_dag_runner")
         self._event_bus = event_bus
+        self._concurrency_limit = max(1, concurrency_limit)

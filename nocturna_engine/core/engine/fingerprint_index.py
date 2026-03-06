@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from nocturna_engine.models.finding import Finding
+from nocturna_engine.exceptions import FingerprintIndexCorruptionError, FingerprintIndexIOError
 
 _INDEX_SCHEMA_VERSION = "1"
 
@@ -86,7 +87,18 @@ class FindingFingerprintIndex:
         path = self._storage_path
         if path is None or not path.exists():
             return
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise FingerprintIndexCorruptionError(
+                f"Fingerprint index file is corrupt: {path}",
+                context={"path": str(path), "error": str(exc)},
+            ) from exc
+        except OSError as exc:
+            raise FingerprintIndexIOError(
+                f"Failed to read fingerprint index: {path}",
+                context={"path": str(path), "error": str(exc)},
+            ) from exc
         entries_payload = payload.get("entries", {})
         if not isinstance(entries_payload, dict):
             return
@@ -117,20 +129,26 @@ class FindingFingerprintIndex:
         path = self._storage_path
         if path is None:
             return
-        payload = {
-            "schema_version": _INDEX_SCHEMA_VERSION,
-            "entries": {
-                fingerprint: snapshot[fingerprint].to_dict()
-                for fingerprint in sorted(snapshot)
-            },
-        }
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_suffix(f"{path.suffix}.tmp")
-        tmp_path.write_text(
-            json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":")),
-            encoding="utf-8",
-        )
-        _atomic_replace(tmp_path, path)
+        try:
+            payload = {
+                "schema_version": _INDEX_SCHEMA_VERSION,
+                "entries": {
+                    fingerprint: snapshot[fingerprint].to_dict()
+                    for fingerprint in sorted(snapshot)
+                },
+            }
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = path.with_suffix(f"{path.suffix}.tmp")
+            tmp_path.write_text(
+                json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            _atomic_replace(tmp_path, path)
+        except OSError as exc:
+            raise FingerprintIndexIOError(
+                f"Failed to persist fingerprint index: {path}",
+                context={"path": str(path), "error": str(exc)},
+            ) from exc
 
     def persist(self) -> None:
         self._persist_sync(dict(self._entries))
