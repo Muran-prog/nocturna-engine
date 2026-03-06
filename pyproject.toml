@@ -42,3 +42,40 @@ include = ["nocturna_engine*"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-ra --import-mode=importlib"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    "E501",    # line too long — handled by formatter
+    "UP007",   # use X | Y — already used, but some legacy remains
+    "SIM108",  # ternary — readability preference
+    "RUF012",  # mutable class default — pydantic models use Field()
+    "B008",    # function call in default — pydantic Field()
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["nocturna_engine"]
+
+[tool.basedpyright]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+reportMissingImports = "error"
+reportUndefinedVariable = "error"
+reportUnusedImport = "warning"
+reportUnannotatedClassAttribute = false
+reportExplicitAny = false
+reportAny = false
+reportUnknownMemberType = false
+reportUnknownArgumentType = false
+reportUnknownVariableType = false
+reportReturnType = "warning"
+reportArgumentType = "warning"
+reportAttributeAccessIssue = "warning"
+reportUninitializedInstanceVariable = false
+reportUnusedCallResult = false
+reportImplicitStringConcatenation = false
+reportUnnecessaryComparison = "warning"
